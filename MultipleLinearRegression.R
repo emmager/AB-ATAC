@@ -1,8 +1,6 @@
 library(ggplot2)
 library(ggbiplot)
 library(lme4)
-library(tidyr)
-library(dplyr)
 library(variancePartition)
 library(doParallel)
 library(foreach)
@@ -10,7 +8,8 @@ library(patchwork)
 library(corrr)
 library(ggcorrplot)
 library(FactoMineR)
-
+library(factoextra)
+library(tidyverse)
 
 setwd("/Genomics/ayroleslab2/emma/ATAC-Seq/PRJNA744248")
 
@@ -45,6 +44,7 @@ dev.off()
 rowstoremove <- read.csv(file = "/Genomics/ayroleslab2/emma/ATAC-Seq/removelines.txt", head = FALSE, sep = "\t")
 log2all_bin_TPMs <- read.csv(file ="/Genomics/ayroleslab2/emma/ATAC-Seq/PRJNA744248/perbinTPMs.txt", head= TRUE, sep = "\t", row.names= 1)
 log2all_bin_TPMsfilt <- log2all_bin_TPMs[-c(rowstoremove$V1),-171] #remove the last column which is all NAs and rows which are poorly annotated/telomeres.https://vscode-remote+ssh-002dremote-002bargo-002dcomp1-002eprinceton-002eedu.vscode-resource.vscode-cdn.net/tmp/RtmpNi8grw/vscode-R/plot.png?version%3D1694830401398
+write.csv(log2all_bin_TPMsfilt, file= ("/Genomics/argo/users/emmarg/lab/ATAC-Seq/PRJNA744248/log2all_bin_TPMsfilt.txt")
 
 ##Import Metadata
 HQ_sample_metadata <- read.csv(file ="/Genomics/ayroleslab2/emma/ATAC-Seq/PRJNA744248/highqualsamples_metadata.txt", head = TRUE, sep = "\t", row.names= 1)
@@ -115,8 +115,19 @@ png(paste0("/Genomics/argo/users/emmarg/lab/ATAC-Seq/PRJNA744248/",colnames(HQ_s
 print((ggbiplot( forpca, var.axes = F) + geom_point( aes( color = HQ_sample_metadata[,i]))))
 dev.off()
 }
-techFactorMatrix <- cbind( techFactorMatrix, forpca$x[ , 1:10])
 
+#Determine which factors are contributing to the principal components
+HQ_sample_metadata$Dummy_Sex <- ifelse(HQ_sample_metadata$Sex == "Female", 1, 0)
+HQ_sample_metadata$Dummy_AgeGroup <- ifelse(HQ_sample_metadata$Age_Group == "Young", 1, 0)
+
+techFactorMatrix <- cbind( HQ_sample_metadata[,c(4:6,8,10:11)], forpca$x[ , 1:10])
+mycor <- cor( techFactorMatrix, method = "spearman")
+
+png(file= "/Genomics/ayroleslab2/emma/ATAC-Seq/PRJNA744248/2023-09-16_TechFactorCorr_PCA.png")
+ggcorrplot(mycor)
+dev.off()
+
+fviz_contrib(forpca, choice = "var", axes = 1, top = 10)
 #Trying to make column w/ CD4, CD8 or CD8 Naive
 df <- HQ_sample_metadata %>% separate(Cell_Subset, c('CD', 'Subtype'))
 HQ_sample_metadata$Immune_Cell_Type <- df$CD
@@ -125,7 +136,7 @@ HQ_sample_metadata$Immune_Cell_Type <- df$CD
 
 
 
-mycor <- cor( techFactorMatrix, method = "spearman")
+
 
 ggcorrplot( mycor)
 
@@ -141,16 +152,7 @@ ggcorrplot(corr_matrix)
 
 #registerDoParallel(cl)
 residual <- matrix(0, nrow = 26574, ncol = 170)
-# for (i in 1:nrow(log2all_bin_TPMsfilt)){
-  for (i in 1:10){
-  mod <- lm(unlist(log2all_bin_TPMsfilt[i,]) ~  Cell_Subset + Age_Group + FRiP_Score + Sex, data = HQ_sample_metadata)
-  residual[i,] <- residuals(mod)
-}
-
-
-residual <- matrix(0, nrow = 26574, ncol = 170)
-# for (i in 1:nrow(log2all_bin_TPMsfilt)){
-  for (i in 1:10){
+for (i in 1:nrow(log2all_bin_TPMsfilt)){
   mod <- lm(unlist(log2all_bin_TPMsfilt[i,]) ~  Cell_Subset + Age_Group + FRiP_Score + Sex, data = HQ_sample_metadata)
   residual[i,] <- residuals(mod)
 }
@@ -170,4 +172,36 @@ png(file= "/Genomics/ayroleslab2/emma/ATAC-Seq/PRJNA744248/within_bin_resids.png
 within_bin_resids
 dev.off()
 
+
+#pca after
+postpca <- prcomp( t( residual ), center = TRUE, scale = TRUE)
+summary( postpca)
+
+for (i in 1:length(HQ_sample_metadata)){
+png(paste0("/Genomics/argo/users/emmarg/lab/ATAC-Seq/PRJNA744248/",colnames(HQ_sample_metadata[i]),"_postpca.png"))
+print((ggbiplot( postpca, var.axes = F) + geom_point( aes( color = HQ_sample_metadata[,i]))))
+dev.off()
+}
+
+
+
+#Correct all Cell Type Specific TPMs for technical factors
+
+for (i in 1:length(unique(HQ_sample_metadata$Cell_Subset))){
+  for (j in 1:nrow((get(BPM_files[i])))){
+    residual <- matrix(0, nrow = nrow((get(BPM_files[i]))), ncol = ncol((get(BPM_files[i]))))
+    mod <- lm(unlist(get(BPM_files[i])[j,]) ~ FRiP_Score + Sex, data = (get(metadata_files[i])))
+    residual[j,] <- residuals(mod)
+    assign(paste0(unique(HQ_sample_metadata$Cell_Subset)[i],"_residual"),residual)
+  }
+}
+
+CD8_BulkNonNaive_BPMs_pca <- prcomp( t( CD8_BulkNonNaive_residual ), center = TRUE, scale = TRUE)
+summary(postpca)
+
+for (i in 1:length(HQ_sample_metadata)){
+png(paste0("/Genomics/argo/users/emmarg/lab/ATAC-Seq/PRJNA744248/",colnames(HQ_sample_metadata[i]),"_postpca.png"))
+print((ggbiplot( postpca, var.axes = F) + geom_point( aes( color = HQ_sample_metadata[,i]))))
+dev.off()
+}
 #shapiro test and p value of esitmated effect size, Intagrative genomics. 
